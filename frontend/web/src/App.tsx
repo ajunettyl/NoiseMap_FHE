@@ -7,9 +7,9 @@ import { useAccount } from 'wagmi';
 import { useFhevm, useEncrypt, useDecrypt } from '../fhevm-sdk/src';
 
 interface NoiseData {
-  id: string;
+  id: number;
   name: string;
-  decibel: number;
+  decibel: string;
   location: string;
   timestamp: number;
   creator: string;
@@ -17,6 +17,15 @@ interface NoiseData {
   publicValue2: number;
   isVerified?: boolean;
   decryptedValue?: number;
+  encryptedValueHandle?: string;
+}
+
+interface NoiseStats {
+  totalReports: number;
+  averageDecibel: number;
+  maxDecibel: number;
+  verifiedReports: number;
+  recentActivity: number;
 }
 
 const App: React.FC = () => {
@@ -24,35 +33,40 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [noiseData, setNoiseData] = useState<NoiseData[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [creatingNoise, setCreatingNoise] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportingNoise, setReportingNoise] = useState(false);
   const [transactionStatus, setTransactionStatus] = useState<{ visible: boolean; status: "pending" | "success" | "error"; message: string; }>({ 
     visible: false, 
-    status: "pending", 
+    status: "pending" as const, 
     message: "" 
   });
   const [newNoiseData, setNewNoiseData] = useState({ name: "", decibel: "", location: "" });
   const [selectedNoise, setSelectedNoise] = useState<NoiseData | null>(null);
-  const [decryptedValue, setDecryptedValue] = useState<number | null>(null);
+  const [decryptedData, setDecryptedData] = useState<number | null>(null);
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [contractAddress, setContractAddress] = useState("");
   const [fhevmInitializing, setFhevmInitializing] = useState(false);
+  const [activeTab, setActiveTab] = useState("dashboard");
   const [searchTerm, setSearchTerm] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const [faqOpen, setFaqOpen] = useState<number | null>(null);
 
   const { status, initialize, isInitialized } = useFhevm();
-  const { encrypt, isEncrypting } = useEncrypt();
+  const { encrypt, isEncrypting} = useEncrypt();
   const { verifyDecryption, isDecrypting: fheIsDecrypting } = useDecrypt();
 
   useEffect(() => {
     const initFhevmAfterConnection = async () => {
-      if (!isConnected || isInitialized || fhevmInitializing) return;
+      if (!isConnected) return;
+      if (isInitialized) return;
+      if (fhevmInitializing) return;
       
       try {
         setFhevmInitializing(true);
+        console.log('Initializing FHEVM for noise monitoring...');
         await initialize();
+        console.log('FHEVM initialized successfully');
       } catch (error) {
+        console.error('Failed to initialize FHEVM:', error);
         setTransactionStatus({ 
           visible: true, 
           status: "error", 
@@ -103,10 +117,10 @@ const App: React.FC = () => {
         try {
           const businessData = await contract.getBusinessData(businessId);
           noiseList.push({
-            id: businessId,
+            id: parseInt(businessId.replace('noise-', '')) || Date.now(),
             name: businessData.name,
-            decibel: Number(businessData.decryptedValue) || 0,
-            location: `Location ${Number(businessData.publicValue1)}`,
+            decibel: businessId,
+            location: businessId,
             timestamp: Number(businessData.timestamp),
             creator: businessData.creator,
             publicValue1: Number(businessData.publicValue1) || 0,
@@ -115,28 +129,28 @@ const App: React.FC = () => {
             decryptedValue: Number(businessData.decryptedValue) || 0
           });
         } catch (e) {
-          console.error('Error loading business data:', e);
+          console.error('Error loading noise data:', e);
         }
       }
       
       setNoiseData(noiseList);
     } catch (e) {
-      setTransactionStatus({ visible: true, status: "error", message: "Failed to load data" });
+      setTransactionStatus({ visible: true, status: "error", message: "Failed to load noise data" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     } finally { 
       setIsRefreshing(false); 
     }
   };
 
-  const createNoiseData = async () => {
+  const reportNoise = async () => {
     if (!isConnected || !address) { 
       setTransactionStatus({ visible: true, status: "error", message: "Please connect wallet first" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
       return; 
     }
     
-    setCreatingNoise(true);
-    setTransactionStatus({ visible: true, status: "pending", message: "Creating noise data with Zama FHE..." });
+    setReportingNoise(true);
+    setTransactionStatus({ visible: true, status: "pending", message: "Encrypting noise data with Zama FHE..." });
     
     try {
       const contract = await getContractWithSigner();
@@ -152,34 +166,34 @@ const App: React.FC = () => {
         newNoiseData.name,
         encryptedResult.encryptedData,
         encryptedResult.proof,
-        Math.floor(Math.random() * 100),
-        Math.floor(Math.random() * 100),
-        `Noise level: ${decibelValue}dB at ${newNoiseData.location}`
+        parseInt(newNoiseData.location) || 0,
+        0,
+        "Noise Monitoring Report"
       );
       
-      setTransactionStatus({ visible: true, status: "pending", message: "Waiting for transaction confirmation..." });
+      setTransactionStatus({ visible: true, status: "pending", message: "Uploading encrypted data..." });
       await tx.wait();
       
-      setTransactionStatus({ visible: true, status: "success", message: "Noise data created successfully!" });
+      setTransactionStatus({ visible: true, status: "success", message: "Noise report encrypted and uploaded!" });
       setTimeout(() => {
         setTransactionStatus({ visible: false, status: "pending", message: "" });
       }, 2000);
       
       await loadData();
-      setShowCreateModal(false);
+      setShowReportModal(false);
       setNewNoiseData({ name: "", decibel: "", location: "" });
     } catch (e: any) {
       const errorMessage = e.message?.includes("user rejected transaction") 
-        ? "Transaction rejected by user" 
-        : "Submission failed: " + (e.message || "Unknown error");
+        ? "Transaction rejected" 
+        : "Upload failed: " + (e.message || "Unknown error");
       setTransactionStatus({ visible: true, status: "error", message: errorMessage });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     } finally { 
-      setCreatingNoise(false); 
+      setReportingNoise(false); 
     }
   };
 
-  const decryptData = async (businessId: string): Promise<number | null> => {
+  const decryptNoiseData = async (businessId: string): Promise<number | null> => {
     if (!isConnected || !address) { 
       setTransactionStatus({ visible: true, status: "error", message: "Please connect wallet first" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
@@ -194,7 +208,7 @@ const App: React.FC = () => {
       const businessData = await contractRead.getBusinessData(businessId);
       if (businessData.isVerified) {
         const storedValue = Number(businessData.decryptedValue) || 0;
-        setTransactionStatus({ visible: true, status: "success", message: "Data already verified on-chain" });
+        setTransactionStatus({ visible: true, status: "success", message: "Noise data already verified" });
         setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
         return storedValue;
       }
@@ -211,25 +225,27 @@ const App: React.FC = () => {
           contractWrite.verifyDecryption(businessId, abiEncodedClearValues, decryptionProof)
       );
       
-      setTransactionStatus({ visible: true, status: "pending", message: "Verifying decryption on-chain..." });
+      setTransactionStatus({ visible: true, status: "pending", message: "Verifying decryption..." });
       
       const clearValue = result.decryptionResult.clearValues[encryptedValueHandle];
       await loadData();
       
-      setTransactionStatus({ visible: true, status: "success", message: "Data decrypted and verified successfully!" });
-      setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
+      setTransactionStatus({ visible: true, status: "success", message: "Noise data decrypted successfully!" });
+      setTimeout(() => {
+        setTransactionStatus({ visible: false, status: "pending", message: "" });
+      }, 2000);
       
       return Number(clearValue);
       
     } catch (e: any) { 
       if (e.message?.includes("Data already verified")) {
-        setTransactionStatus({ visible: true, status: "success", message: "Data is already verified on-chain" });
+        setTransactionStatus({ visible: true, status: "success", message: "Data already verified" });
         setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
         await loadData();
         return null;
       }
       
-      setTransactionStatus({ visible: true, status: "error", message: "Decryption failed: " + (e.message || "Unknown error") });
+      setTransactionStatus({ visible: true, status: "error", message: "Decryption failed" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
       return null; 
     } finally { 
@@ -237,7 +253,7 @@ const App: React.FC = () => {
     }
   };
 
-  const checkAvailability = async () => {
+  const testAvailability = async () => {
     try {
       const contract = await getContractReadOnly();
       if (!contract) return;
@@ -246,18 +262,46 @@ const App: React.FC = () => {
       setTransactionStatus({ visible: true, status: "success", message: "Contract is available and ready!" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
     } catch (e) {
-      setTransactionStatus({ visible: true, status: "error", message: "Availability check failed" });
+      setTransactionStatus({ visible: true, status: "error", message: "Contract test failed" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     }
   };
 
-  const filteredData = noiseData.filter(item =>
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.location.toLowerCase().includes(searchTerm.toLowerCase())
+  const getNoiseStats = (): NoiseStats => {
+    const totalReports = noiseData.length;
+    const verifiedReports = noiseData.filter(n => n.isVerified).length;
+    const recentActivity = noiseData.filter(n => Date.now()/1000 - n.timestamp < 60 * 60 * 24).length;
+    
+    const decibelValues = noiseData
+      .filter(n => n.isVerified && n.decryptedValue)
+      .map(n => n.decryptedValue as number);
+    
+    const averageDecibel = decibelValues.length > 0 
+      ? decibelValues.reduce((sum, val) => sum + val, 0) / decibelValues.length 
+      : 0;
+    
+    const maxDecibel = decibelValues.length > 0 ? Math.max(...decibelValues) : 0;
+
+    return {
+      totalReports,
+      averageDecibel,
+      maxDecibel,
+      verifiedReports,
+      recentActivity
+    };
+  };
+
+  const filteredNoiseData = noiseData.filter(noise =>
+    noise.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    noise.creator.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  const faqItems = [
+    { question: "How does FHE protect my privacy?", answer: "FHE allows noise level encryption before upload, keeping your location and data private while enabling aggregate analysis." },
+    { question: "What data is encrypted?", answer: "Only the decibel level is encrypted. Timestamp and area code remain public for mapping purposes." },
+    { question: "How accurate is the noise mapping?", answer: "Data is aggregated from multiple encrypted sources to create accurate heatmaps without exposing individual inputs." },
+    { question: "Can I delete my noise reports?", answer: "Due to blockchain immutability, reports cannot be deleted but are fully encrypted and anonymous." }
+  ];
 
   if (!isConnected) {
     return (
@@ -265,29 +309,30 @@ const App: React.FC = () => {
         <header className="app-header">
           <div className="logo">
             <h1>🔇 FHE Noise Map</h1>
+            <span>Privacy-Preserving Noise Monitoring</span>
           </div>
-          <div className="header-actions">
+          <div className="wallet-connect-wrapper">
             <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
           </div>
         </header>
         
         <div className="connection-prompt">
           <div className="connection-content">
-            <div className="connection-icon">🔇</div>
-            <h2>Connect Your Wallet to Monitor Noise</h2>
-            <p>Join our privacy-preserving noise monitoring network using Zama FHE encryption.</p>
-            <div className="connection-steps">
-              <div className="step">
-                <span>1</span>
-                <p>Connect wallet to initialize FHE system</p>
+            <div className="noise-icon">🔇</div>
+            <h2>Connect to Monitor Noise Securely</h2>
+            <p>Join our privacy-first noise monitoring network using Fully Homomorphic Encryption</p>
+            <div className="privacy-features">
+              <div className="feature">
+                <span className="feature-icon">🔐</span>
+                <span>Encrypted Data Upload</span>
               </div>
-              <div className="step">
-                <span>2</span>
-                <p>Encrypt and upload noise data anonymously</p>
+              <div className="feature">
+                <span className="feature-icon">🌍</span>
+                <span>Anonymous Contribution</span>
               </div>
-              <div className="step">
-                <span>3</span>
-                <p>View community noise map without exposing locations</p>
+              <div className="feature">
+                <span className="feature-icon">📊</span>
+                <span>Collective Insights</span>
               </div>
             </div>
           </div>
@@ -313,142 +358,212 @@ const App: React.FC = () => {
     </div>
   );
 
+  const stats = getNoiseStats();
+
   return (
     <div className="app-container">
       <header className="app-header">
-        <div className="logo">
+        <div className="logo-section">
           <h1>🔇 FHE Noise Map</h1>
-          <span>Privacy-Preserving Community Monitoring</span>
+          <span>Encrypted Urban Sound Monitoring</span>
         </div>
         
+        <nav className="main-nav">
+          <button 
+            className={`nav-btn ${activeTab === "dashboard" ? "active" : ""}`}
+            onClick={() => setActiveTab("dashboard")}
+          >
+            🌍 Dashboard
+          </button>
+          <button 
+            className={`nav-btn ${activeTab === "reports" ? "active" : ""}`}
+            onClick={() => setActiveTab("reports")}
+          >
+            📊 Noise Reports
+          </button>
+          <button 
+            className={`nav-btn ${activeTab === "faq" ? "active" : ""}`}
+            onClick={() => setActiveTab("faq")}
+          >
+            ❓ FAQ
+          </button>
+        </nav>
+
         <div className="header-actions">
-          <button onClick={checkAvailability} className="availability-btn">
-            Check System
+          <button 
+            onClick={() => setShowReportModal(true)} 
+            className="report-btn metal-btn"
+          >
+            📢 Report Noise
           </button>
-          <button onClick={() => setShowCreateModal(true)} className="create-btn">
-            + Report Noise
-          </button>
-          <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
+          <div className="wallet-connect-wrapper">
+            <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
+          </div>
         </div>
       </header>
       
-      <div className="main-content">
-        <div className="stats-panel">
-          <div className="stat-card">
-            <h3>Total Reports</h3>
-            <div className="stat-value">{noiseData.length}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Verified Data</h3>
-            <div className="stat-value">{noiseData.filter(d => d.isVerified).length}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Avg Decibel</h3>
-            <div className="stat-value">
-              {noiseData.length > 0 ? Math.round(noiseData.reduce((sum, d) => sum + d.decibel, 0) / noiseData.length) : 0}dB
-            </div>
-          </div>
-        </div>
-
-        <div className="search-section">
-          <input
-            type="text"
-            placeholder="Search noise reports..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="search-input"
-          />
-          <button onClick={loadData} className="refresh-btn" disabled={isRefreshing}>
-            {isRefreshing ? "🔄" : "Refresh"}
-          </button>
-        </div>
-
-        <div className="data-section">
-          <h2>Community Noise Reports</h2>
-          <div className="data-list">
-            {paginatedData.length === 0 ? (
-              <div className="no-data">
-                <p>No noise reports found</p>
-                <button onClick={() => setShowCreateModal(true)} className="create-btn">
-                  Report First Noise
-                </button>
+      <main className="main-content">
+        {activeTab === "dashboard" && (
+          <div className="dashboard-tab">
+            <div className="stats-grid">
+              <div className="stat-card metal-card">
+                <div className="stat-icon">📈</div>
+                <div className="stat-value">{stats.totalReports}</div>
+                <div className="stat-label">Total Reports</div>
               </div>
-            ) : (
-              paginatedData.map((item, index) => (
-                <div 
-                  className={`data-item ${selectedNoise?.id === item.id ? "selected" : ""}`}
-                  key={index}
-                  onClick={() => setSelectedNoise(item)}
-                >
-                  <div className="item-header">
-                    <span className="item-name">{item.name}</span>
-                    <span className={`status ${item.isVerified ? "verified" : "pending"}`}>
-                      {item.isVerified ? "✅ Verified" : "🔓 Encrypted"}
-                    </span>
-                  </div>
-                  <div className="item-details">
-                    <span>📍 {item.location}</span>
-                    <span>🔊 {item.isVerified ? `${item.decryptedValue}dB` : "Encrypted dB"}</span>
-                    <span>🕐 {new Date(item.timestamp * 1000).toLocaleDateString()}</span>
+              <div className="stat-card metal-card">
+                <div className="stat-icon">🔊</div>
+                <div className="stat-value">{stats.averageDecibel.toFixed(1)}dB</div>
+                <div className="stat-label">Average Level</div>
+              </div>
+              <div className="stat-card metal-card">
+                <div className="stat-icon">⚠️</div>
+                <div className="stat-value">{stats.maxDecibel}dB</div>
+                <div className="stat-label">Peak Level</div>
+              </div>
+              <div className="stat-card metal-card">
+                <div className="stat-icon">✅</div>
+                <div className="stat-value">{stats.verifiedReports}</div>
+                <div className="stat-label">Verified</div>
+              </div>
+            </div>
+            
+            <div className="fhe-flow-section metal-card">
+              <h3>🔐 FHE Encryption Flow</h3>
+              <div className="flow-steps">
+                <div className="flow-step">
+                  <div className="step-number">1</div>
+                  <div className="step-content">
+                    <strong>Local Encryption</strong>
+                    <p>Noise data encrypted on your device before upload</p>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-
-          {totalPages > 1 && (
-            <div className="pagination">
-              <button 
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-              >
-                Previous
-              </button>
-              <span>Page {currentPage} of {totalPages}</span>
-              <button 
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="info-panel">
-          <h3>How FHE Protects Your Privacy</h3>
-          <div className="fhe-flow">
-            <div className="flow-step">
-              <div className="step-icon">1</div>
-              <div className="step-content">
-                <h4>Local Encryption</h4>
-                <p>Noise data encrypted on your device before upload</p>
+                <div className="flow-step">
+                  <div className="step-number">2</div>
+                  <div className="step-content">
+                    <strong>Secure Storage</strong>
+                    <p>Encrypted data stored on blockchain</p>
+                  </div>
+                </div>
+                <div className="flow-step">
+                  <div className="step-number">3</div>
+                  <div className="step-content">
+                    <strong>Private Analysis</strong>
+                    <p>Noise maps generated without exposing individual data</p>
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="flow-step">
-              <div className="step-icon">2</div>
-              <div className="step-content">
-                <h4>Secure Storage</h4>
-                <p>Only encrypted data stored on blockchain</p>
-              </div>
-            </div>
-            <div className="flow-step">
-              <div className="step-icon">3</div>
-              <div className="step-content">
-                <h4>Private Analysis</h4>
-                <p>Noise maps generated without exposing individual data</p>
+
+            <div className="action-section metal-card">
+              <h3>Quick Actions</h3>
+              <div className="action-buttons">
+                <button onClick={testAvailability} className="action-btn metal-btn">
+                  Test Contract
+                </button>
+                <button onClick={loadData} className="action-btn metal-btn">
+                  Refresh Data
+                </button>
               </div>
             </div>
           </div>
-        </div>
-      </div>
-      
-      {showCreateModal && (
-        <ModalCreateNoise 
-          onSubmit={createNoiseData}
-          onClose={() => setShowCreateModal(false)}
-          creating={creatingNoise}
-          noiseData={newNoiseData}
+        )}
+
+        {activeTab === "reports" && (
+          <div className="reports-tab">
+            <div className="reports-header">
+              <h2>Noise Reports</h2>
+              <div className="reports-controls">
+                <input
+                  type="text"
+                  placeholder="Search reports..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="search-input metal-input"
+                />
+                <button onClick={loadData} className="refresh-btn metal-btn">
+                  🔄 Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="reports-list">
+              {filteredNoiseData.length === 0 ? (
+                <div className="no-reports metal-card">
+                  <div className="noise-icon">🔇</div>
+                  <p>No noise reports yet</p>
+                  <button 
+                    className="report-btn metal-btn"
+                    onClick={() => setShowReportModal(true)}
+                  >
+                    Be the first to report
+                  </button>
+                </div>
+              ) : (
+                filteredNoiseData.map((noise) => (
+                  <div 
+                    key={noise.id} 
+                    className={`report-card metal-card ${noise.isVerified ? 'verified' : ''}`}
+                    onClick={() => setSelectedNoise(noise)}
+                  >
+                    <div className="report-header">
+                      <h4>{noise.name}</h4>
+                      <span className={`status-badge ${noise.isVerified ? 'verified' : 'pending'}`}>
+                        {noise.isVerified ? '✅ Verified' : '🔒 Encrypted'}
+                      </span>
+                    </div>
+                    <div className="report-details">
+                      <div className="detail-item">
+                        <span>Decibel Level:</span>
+                        <span>{noise.isVerified ? `${noise.decryptedValue}dB` : '🔒 Encrypted'}</span>
+                      </div>
+                      <div className="detail-item">
+                        <span>Area Code:</span>
+                        <span>{noise.publicValue1}</span>
+                      </div>
+                      <div className="detail-item">
+                        <span>Reported:</span>
+                        <span>{new Date(noise.timestamp * 1000).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === "faq" && (
+          <div className="faq-tab">
+            <h2>Frequently Asked Questions</h2>
+            <div className="faq-list">
+              {faqItems.map((faq, index) => (
+                <div key={index} className="faq-item metal-card">
+                  <div 
+                    className="faq-question"
+                    onClick={() => setFaqOpen(faqOpen === index ? null : index)}
+                  >
+                    <span>{faq.question}</span>
+                    <span className="faq-toggle">{faqOpen === index ? '−' : '+'}</span>
+                  </div>
+                  {faqOpen === index && (
+                    <div className="faq-answer">
+                      <p>{faq.answer}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showReportModal && (
+        <ReportModal 
+          onSubmit={reportNoise} 
+          onClose={() => setShowReportModal(false)} 
+          reporting={reportingNoise} 
+          noiseData={newNoiseData} 
           setNoiseData={setNewNoiseData}
           isEncrypting={isEncrypting}
         />
@@ -456,26 +571,26 @@ const App: React.FC = () => {
       
       {selectedNoise && (
         <NoiseDetailModal 
-          noise={selectedNoise}
-          onClose={() => {
-            setSelectedNoise(null);
-            setDecryptedValue(null);
-          }}
-          decryptedValue={decryptedValue}
-          isDecrypting={isDecrypting || fheIsDecrypting}
-          decryptData={() => decryptData(selectedNoise.id)}
+          noise={selectedNoise} 
+          onClose={() => { 
+            setSelectedNoise(null); 
+            setDecryptedData(null); 
+          }} 
+          decryptedData={decryptedData} 
+          isDecrypting={isDecrypting || fheIsDecrypting} 
+          decryptData={() => decryptNoiseData(selectedNoise.decibel)}
         />
       )}
       
       {transactionStatus.visible && (
-        <div className="transaction-modal">
-          <div className="transaction-content">
-            <div className={`transaction-icon ${transactionStatus.status}`}>
+        <div className="transaction-toast">
+          <div className={`toast-content ${transactionStatus.status}`}>
+            <div className="toast-icon">
               {transactionStatus.status === "pending" && <div className="fhe-spinner"></div>}
               {transactionStatus.status === "success" && "✓"}
               {transactionStatus.status === "error" && "✗"}
             </div>
-            <div className="transaction-message">{transactionStatus.message}</div>
+            <div className="toast-message">{transactionStatus.message}</div>
           </div>
         </div>
       )}
@@ -483,14 +598,14 @@ const App: React.FC = () => {
   );
 };
 
-const ModalCreateNoise: React.FC<{
-  onSubmit: () => void;
-  onClose: () => void;
-  creating: boolean;
+const ReportModal: React.FC<{
+  onSubmit: () => void; 
+  onClose: () => void; 
+  reporting: boolean;
   noiseData: any;
   setNoiseData: (data: any) => void;
   isEncrypting: boolean;
-}> = ({ onSubmit, onClose, creating, noiseData, setNoiseData, isEncrypting }) => {
+}> = ({ onSubmit, onClose, reporting, noiseData, setNoiseData, isEncrypting }) => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     if (name === 'decibel') {
@@ -503,64 +618,73 @@ const ModalCreateNoise: React.FC<{
 
   return (
     <div className="modal-overlay">
-      <div className="create-noise-modal">
+      <div className="report-modal metal-card">
         <div className="modal-header">
-          <h2>Report Noise Level</h2>
-          <button onClick={onClose} className="close-modal">×</button>
+          <h2>📢 Report Noise Level</h2>
+          <button onClick={onClose} className="close-modal">&times;</button>
         </div>
         
         <div className="modal-body">
-          <div className="fhe-notice">
-            <strong>FHE 🔐 Privacy Protection</strong>
-            <p>Noise level will be encrypted with Zama FHE to protect your location privacy</p>
+          <div className="encryption-notice">
+            <div className="encryption-icon">🔐</div>
+            <div>
+              <strong>FHE Protected</strong>
+              <p>Noise level will be encrypted before upload</p>
+            </div>
           </div>
           
           <div className="form-group">
-            <label>Location Description *</label>
+            <label>Location Description</label>
             <input 
-              type="text"
-              name="name"
-              value={noiseData.name}
-              onChange={handleChange}
-              placeholder="e.g., Central Park, Downtown Area..."
+              type="text" 
+              name="name" 
+              value={noiseData.name} 
+              onChange={handleChange} 
+              placeholder="e.g., Downtown Park, Office Area..." 
+              className="metal-input"
             />
           </div>
           
           <div className="form-group">
-            <label>Noise Level (dB) *</label>
+            <label>Noise Level (dB) - Integer Only</label>
             <input 
-              type="number"
-              name="decibel"
-              value={noiseData.decibel}
-              onChange={handleChange}
-              placeholder="Enter decibel level..."
+              type="number" 
+              name="decibel" 
+              value={noiseData.decibel} 
+              onChange={handleChange} 
+              placeholder="Enter decibel level..." 
+              step="1"
               min="0"
               max="150"
+              className="metal-input"
             />
-            <div className="data-type-label">FHE Encrypted Integer</div>
+            <div className="input-hint">FHE Encrypted Integer</div>
           </div>
           
           <div className="form-group">
-            <label>Area Type</label>
+            <label>Area Code (Public)</label>
             <input 
-              type="text"
-              name="location"
-              value={noiseData.location}
-              onChange={handleChange}
-              placeholder="e.g., Residential, Commercial, Park..."
+              type="number" 
+              min="1" 
+              max="999" 
+              name="location" 
+              value={noiseData.location} 
+              onChange={handleChange} 
+              placeholder="Enter area code..." 
+              className="metal-input"
             />
-            <div className="data-type-label">Public Data</div>
+            <div className="input-hint">Public Data for Mapping</div>
           </div>
         </div>
         
         <div className="modal-footer">
-          <button onClick={onClose} className="cancel-btn">Cancel</button>
+          <button onClick={onClose} className="cancel-btn metal-btn">Cancel</button>
           <button 
-            onClick={onSubmit}
-            disabled={creating || isEncrypting || !noiseData.name || !noiseData.decibel}
-            className="submit-btn"
+            onClick={onSubmit} 
+            disabled={reporting || isEncrypting || !noiseData.name || !noiseData.decibel || !noiseData.location} 
+            className="submit-btn metal-btn"
           >
-            {creating || isEncrypting ? "Encrypting..." : "Submit Report"}
+            {reporting || isEncrypting ? "🔐 Encrypting..." : "📢 Report Noise"}
           </button>
         </div>
       </div>
@@ -571,90 +695,92 @@ const ModalCreateNoise: React.FC<{
 const NoiseDetailModal: React.FC<{
   noise: NoiseData;
   onClose: () => void;
-  decryptedValue: number | null;
+  decryptedData: number | null;
   isDecrypting: boolean;
   decryptData: () => Promise<number | null>;
-}> = ({ noise, onClose, decryptedValue, isDecrypting, decryptData }) => {
+}> = ({ noise, onClose, decryptedData, isDecrypting, decryptData }) => {
   const handleDecrypt = async () => {
-    if (decryptedValue !== null) return;
-    
-    const decrypted = await decryptData();
-    if (decrypted !== null) {
-      // Value is set via state update in parent
-    }
+    if (decryptedData !== null) return;
+    await decryptData();
   };
-
-  const getNoiseLevel = (db: number) => {
-    if (db < 30) return "Quiet";
-    if (db < 60) return "Moderate";
-    if (db < 90) return "Loud";
-    return "Very Loud";
-  };
-
-  const displayValue = noise.isVerified ? noise.decryptedValue : decryptedValue;
 
   return (
     <div className="modal-overlay">
-      <div className="noise-detail-modal">
+      <div className="detail-modal metal-card">
         <div className="modal-header">
           <h2>Noise Report Details</h2>
-          <button onClick={onClose} className="close-modal">×</button>
+          <button onClick={onClose} className="close-modal">&times;</button>
         </div>
         
         <div className="modal-body">
           <div className="noise-info">
-            <div className="info-item">
+            <div className="info-row">
               <span>Location:</span>
               <strong>{noise.name}</strong>
             </div>
-            <div className="info-item">
-              <span>Area Type:</span>
-              <strong>{noise.location}</strong>
-            </div>
-            <div className="info-item">
-              <span>Reported:</span>
-              <strong>{new Date(noise.timestamp * 1000).toLocaleString()}</strong>
-            </div>
-            <div className="info-item">
+            <div className="info-row">
               <span>Reporter:</span>
               <strong>{noise.creator.substring(0, 6)}...{noise.creator.substring(38)}</strong>
+            </div>
+            <div className="info-row">
+              <span>Date:</span>
+              <strong>{new Date(noise.timestamp * 1000).toLocaleDateString()}</strong>
+            </div>
+            <div className="info-row">
+              <span>Area Code:</span>
+              <strong>{noise.publicValue1}</strong>
             </div>
           </div>
           
           <div className="data-section">
-            <h3>Noise Level Data</h3>
-            <div className="noise-display">
-              <div className="decibel-value">
-                {displayValue !== undefined && displayValue !== null ? (
-                  <>
-                    <span className="db-number">{displayValue}</span>
-                    <span className="db-unit">dB</span>
-                    <span className="noise-level">{getNoiseLevel(displayValue)}</span>
-                  </>
-                ) : (
-                  <span className="encrypted-text">🔒 Encrypted</span>
-                )}
+            <h3>Encrypted Noise Data</h3>
+            <div className="data-display">
+              <div className="data-value">
+                {noise.isVerified ? 
+                  `${noise.decryptedValue} dB (Verified)` : 
+                  decryptedData !== null ? 
+                  `${decryptedData} dB (Decrypted)` : 
+                  "🔒 Encrypted"
+                }
               </div>
-              
               <button 
-                className={`decrypt-btn ${(noise.isVerified || decryptedValue !== null) ? 'decrypted' : ''}`}
-                onClick={handleDecrypt}
+                className={`decrypt-btn metal-btn ${(noise.isVerified || decryptedData !== null) ? 'decrypted' : ''}`}
+                onClick={handleDecrypt} 
                 disabled={isDecrypting || noise.isVerified}
               >
-                {isDecrypting ? "Decrypting..." : 
+                {isDecrypting ? "🔓 Decrypting..." : 
                  noise.isVerified ? "✅ Verified" : 
-                 decryptedValue !== null ? "✅ Decrypted" : "🔓 Decrypt"}
+                 decryptedData !== null ? "🔄 Re-decrypt" : 
+                 "🔓 Decrypt"}
               </button>
             </div>
-            
-            <div className="fhe-explanation">
-              <p>This noise level was encrypted using FHE to protect the reporter's privacy while contributing to community noise mapping.</p>
-            </div>
           </div>
+
+          {(noise.isVerified || decryptedData !== null) && (
+            <div className="analysis-section">
+              <h3>Noise Level Analysis</h3>
+              <div className="noise-meter">
+                <div 
+                  className="meter-fill" 
+                  style={{ width: `${Math.min(100, ((noise.isVerified ? noise.decryptedValue! : decryptedData!) / 120) * 100)}%` }}
+                >
+                  <span className="meter-value">
+                    {noise.isVerified ? noise.decryptedValue! : decryptedData!} dB
+                  </span>
+                </div>
+              </div>
+              <div className="noise-assessment">
+                {((noise.isVerified ? noise.decryptedValue! : decryptedData!) < 60) && "Quiet - Normal conversation level"}
+                {((noise.isVerified ? noise.decryptedValue! : decryptedData!) >= 60 && (noise.isVerified ? noise.decryptedValue! : decryptedData!) < 80) && "Moderate - Office environment"}
+                {((noise.isVerified ? noise.decryptedValue! : decryptedData!) >= 80 && (noise.isVerified ? noise.decryptedValue! : decryptedData!) < 100) && "Loud - Potential hearing risk"}
+                {((noise.isVerified ? noise.decryptedValue! : decryptedData!) >= 100) && "Very Loud - Hearing protection recommended"}
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="modal-footer">
-          <button onClick={onClose} className="close-btn">Close</button>
+          <button onClick={onClose} className="close-btn metal-btn">Close</button>
         </div>
       </div>
     </div>
